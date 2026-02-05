@@ -1,0 +1,14 @@
+const tl = gsap.timeline({ paused: true });
+
+const width = {{WIDTH}};
+const height = {{HEIGHT}};
+
+{{#ASSETS}}
+tl.from("#{{id}}", {
+  duration: 0.5,
+  autoAlpha: 0,
+  ease: "sine.inOut"
+});
+{{/ASSETS}}
+
+tl.play();
