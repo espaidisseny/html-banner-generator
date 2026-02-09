@@ -526,6 +526,77 @@ function logSummary({ processed, created, updated, skipped, filteredOut, mode, o
   if (shouldZip) console.log(`📦 Zipped to: ${zipRoot}`);
 }
 
+function bytesToKb(bytes) {
+  return bytes / 1024;
+}
+
+function fmtKb(bytes) {
+  return `${bytesToKb(bytes).toFixed(1)} kb`;
+}
+
+async function checkZipSize({ zipPath, fmt, maxBytes }) {
+  if (!maxBytes) return { ok: true, skipped: true };
+
+  const stat = await fs.stat(zipPath);
+  const actual = stat.size;
+
+  const ok = actual <= maxBytes;
+  const label = `${fmt?.language ?? fmt?.lang ?? ""}_${fmt?.motive ?? fmt?.motiveName ?? ""}_${fmt?.width}x${fmt?.height}`
+    .replace(/^_+|_+$/g, "")
+    .replace(/__+/g, "_");
+
+  if (ok) {
+    console.log(`✅ ZIP size ok: ${path.basename(zipPath)} — ${fmtKb(actual)} / limit ${fmtKb(maxBytes)} (${label})`);
+  } else {
+    console.warn(`⚠️ ZIP OVERSIZE: ${path.basename(zipPath)} — ${fmtKb(actual)} / limit ${fmtKb(maxBytes)} (${label})`);
+  }
+
+  return { ok, actualBytes: actual, maxBytes };
+}
+
+// Try to match a banner folder to a format entry (used in --zip-only)
+function parseMetaFromBannerFolder({ outRoot, bannerFolder }) {
+  // bannerFolder = .../<campaign>/<lang?>/<motive?>/<WxH>
+  const rel = path.relative(outRoot, bannerFolder).split(path.sep);
+  const sizePart = rel[rel.length - 1] ?? "";
+  const m = sizePart.match(/^(\d+)x(\d+)$/i);
+  if (!m) return null;
+
+  const width = Number(m[1]);
+  const height = Number(m[2]);
+
+  // if folder depth is 1: [ "300x250" ]
+  // if depth is 2: [ "PHEV", "300x250" ]
+  // if depth is 3+: [ "PHEV", "s700_v2", "300x250" ] (your structure)
+  const langCode = rel.length >= 2 ? rel[0] : null;
+  const motiveName = rel.length >= 3 ? rel[1] : null;
+
+  return { width, height, langCode, motiveName };
+}
+
+function findFormatForFolder({ formats, meta }) {
+  if (!meta) return null;
+
+  // Prefer exact match on width/height + language + motive if available
+  const exact = formats.find((f) => {
+    const w = Number(f.width), h = Number(f.height);
+    if (w !== meta.width || h !== meta.height) return false;
+
+    const lang = String(f.language ?? f.lang ?? "");
+    const motive = String(f.motive ?? f.motiveName ?? "");
+
+    if (meta.langCode && lang && lang !== meta.langCode) return false;
+    if (meta.motiveName && motive && motive !== meta.motiveName) return false;
+
+    return true;
+  });
+  if (exact) return exact;
+
+  // Fallback: match only by size
+  return formats.find((f) => Number(f.width) === meta.width && Number(f.height) === meta.height) ?? null;
+}
+
+
 // -------------------- generation --------------------
 
 async function generateFromFormatsJson({
@@ -645,8 +716,14 @@ async function generateFromFormatsJson({
 
     if (shouldZip) {
       const zipName = makeZipName({ campaign, langCode, motiveName, width, height });
-      await zipFolder(bannerFolder, path.join(zipRoot, zipName));
+      const zipPath = path.join(zipRoot, zipName);
+
+      await zipFolder(bannerFolder, zipPath);
+
+      // Compare ZIP size to formats.json "size"
+      await checkZipSize({ zipPath, fmt, maxBytes });
     }
+
 
     processed += 1;
     if (!exists) created += 1;
@@ -682,7 +759,7 @@ async function resolveOnlySizes({ zipOnly, makePreview }) {
 
 // -------------------- zip-only workflow --------------------
 
-async function zipOnlyWorkflow({ outRoot, zipRoot, campaign, makePreview, sourceRoot }) {
+async function zipOnlyWorkflow({ outRoot, zipRoot, campaign, makePreview, sourceRoot, formats }) {
   const folders = await collectBannerFolders(outRoot);
   if (!folders.length) {
     console.error(`❌ No banner folders found under: ${outRoot}`);
@@ -693,7 +770,19 @@ async function zipOnlyWorkflow({ outRoot, zipRoot, campaign, makePreview, source
   for (const bannerFolder of folders) {
     const rel = path.relative(outRoot, bannerFolder).split(path.sep).join("_");
     const zipName = `${campaign}_${rel}`.replace(/\s+/g, "_").replace(/[^\w.-]+/g, "_") + ".zip";
-    await zipFolder(bannerFolder, path.join(zipRoot, zipName));
+    const zipPath = path.join(zipRoot, zipName);
+    await zipFolder(bannerFolder, zipPath);
+
+    // Compare ZIP size if we can find a matching format
+    const meta = parseMetaFromBannerFolder({ outRoot, bannerFolder });
+    const fmt = findFormatForFolder({ formats: formats ?? [], meta });
+    const maxBytes = parseKb(fmt?.size);
+    if (fmt && maxBytes) {
+      await checkZipSize({ zipPath, fmt, maxBytes });
+    } else if (formats?.length) {
+      console.log(`ℹ️ ZIP created (no matching format to validate size): ${path.basename(zipPath)}`);
+    }
+
     zipped += 1;
   }
 
@@ -740,9 +829,11 @@ async function main() {
   const onlySizes = await resolveOnlySizes({ zipOnly, makePreview });
 
   if (zipOnly) {
-    await zipOnlyWorkflow({ outRoot, zipRoot, campaign, makePreview, sourceRoot });
+    const formats = readFormatsFromCfg(cfg);
+    await zipOnlyWorkflow({ outRoot, zipRoot, campaign, makePreview, sourceRoot, formats });
     return;
   }
+
 
   await generateFromFormatsJson({
     formatsAbsPath,
