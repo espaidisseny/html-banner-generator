@@ -4,13 +4,33 @@ import { fileURLToPath } from "node:url";
 import fs from "fs-extra";
 import mustache from "mustache";
 import archiver from "archiver";
+import readline from "node:readline";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const TEMPLATE_ROOT = path.join(__dirname, "..", "templates", "standard");
+// -------------------- templates --------------------
 
-// -------------------- utils --------------------
+const TEMPLATES_DIR = path.join(__dirname, "..", "templates");
+
+function getTemplateRoot(fmt, cfg, templateOverride) {
+  const type = templateOverride ?? fmt?.brand?.type ?? cfg?.brand?.type ?? "standard";
+  return { type: String(type), root: path.join(TEMPLATES_DIR, String(type)) };
+}
+
+// -------------------- prompt utils --------------------
+
+function ask(question) {
+  return new Promise((resolve) => {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    rl.question(question, (answer) => {
+      rl.close();
+      resolve(String(answer || "").trim());
+    });
+  });
+}
+
+// -------------------- cli utils --------------------
 
 function getArgValue(flag) {
   const args = process.argv.slice(2);
@@ -23,17 +43,88 @@ function hasFlag(flag) {
   return process.argv.slice(2).includes(flag);
 }
 
+function stripKnownFlags(args) {
+  // Remove known flags + their values so leftover args can be treated as sizes.
+  const flagsWithValue = new Set([
+    "--formats",
+    "--config",
+    "--outDir",
+    "--campaign",
+    "--clicktag",
+    "--template",
+    "--port",
+    "--only-size",
+    "--only-lang",
+    "--only-motive",
+    "--only-template",
+    "--only-index",
+  ]);
+  const flagsNoValue = new Set(["--zip", "--zip-only", "--preview", "--open", "--create-only", "--update"]);
+
+  const out = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (flagsNoValue.has(a)) continue;
+    if (flagsWithValue.has(a)) {
+      i++;
+      continue;
+    }
+    out.push(a);
+  }
+  return out;
+}
+
 function parseKb(sizeStr) {
   if (!sizeStr) return null;
   const m = String(sizeStr).trim().match(/^(\d+(?:\.\d+)?)\s*kb$/i);
   return m ? Math.round(Number(m[1]) * 1024) : null;
 }
 
-// Resolve formats.json even if user runs the command from /source or anywhere else.
-// Priority:
-// 1) --formats / --config value (relative to cwd)
-// 2) <projectRoot>/formats.json (projectRoot = ../ from this CLI file)
-// 3) <cwd>/formats.json
+function normalizeSize(width, height) {
+  const w = Number(width);
+  const h = Number(height);
+  if (!Number.isFinite(w) || !Number.isFinite(h)) return "";
+  return `${w}x${h}`;
+}
+
+function parseSizeList(input) {
+  // accepts: "300x600", "300x600, 728x90", ["300x600","728x90"]
+  const raw = Array.isArray(input) ? input.join(",") : String(input || "");
+  const parts = raw
+    .split(/[,\s]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const sizes = [];
+  for (const p of parts) {
+    const m = p.match(/^(\d+)\s*x\s*(\d+)$/i);
+    if (!m) continue;
+    sizes.push(`${Number(m[1])}x${Number(m[2])}`);
+  }
+  return sizes.length ? new Set(sizes) : null;
+}
+
+function parseCsvSet(v) {
+  if (!v) return null;
+  const parts = String(v)
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return parts.length ? new Set(parts) : null;
+}
+
+function parseIndexSet(v) {
+  if (!v) return null;
+  const parts = String(v)
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((s) => Number(s))
+    .filter((n) => Number.isFinite(n) && n >= 0);
+  return parts.length ? new Set(parts) : null;
+}
+
+// Resolve formats.json even if user runs from /src or anywhere else.
 async function resolveFormatsPath() {
   const cliValue = getArgValue("--formats") ?? getArgValue("--config");
   if (cliValue) return path.resolve(process.cwd(), cliValue);
@@ -48,25 +139,31 @@ async function resolveFormatsPath() {
 }
 
 function makeZipName({ campaign, langCode, motiveName, width, height }) {
-  return [campaign, langCode, motiveName, `${width}x${height}`]
-    .filter(Boolean)
-    .join("_")
-    .replace(/\s+/g, "_")
-    .replace(/[^\w.-]+/g, "_") + ".zip";
+  return (
+    [campaign, langCode, motiveName, `${width}x${height}`]
+      .filter(Boolean)
+      .join("_")
+      .replace(/\s+/g, "_")
+      .replace(/[^\w.-]+/g, "_") + ".zip"
+  );
 }
 
 // -------------------- preview (GLOBAL GRID) --------------------
 
 async function collectBannerIndexFiles(rootDir) {
   const found = [];
+  const rootIndex = path.join(rootDir, "index.html");
 
   async function walk(dir) {
     const entries = await fs.readdir(dir, { withFileTypes: true });
+    const hasIndex = entries.some((e) => e.isFile() && e.name === "index.html");
 
-    const hasIndex = entries.some((e) => !e.isDirectory() && e.name === "index.html");
     if (hasIndex) {
-      found.push(path.join(dir, "index.html"));
-      return;
+      const indexPath = path.join(dir, "index.html");
+      if (path.resolve(indexPath) !== path.resolve(rootIndex)) {
+        found.push(indexPath);
+        return;
+      }
     }
 
     for (const e of entries) {
@@ -86,17 +183,22 @@ function escapeHtml(s) {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 }
+
 function buildGlobalPreviewHtml({ items }) {
   const cards = items
-    .map(({ label, href, h }) => {
-      const iframeHeight = Number.isFinite(h) ? Math.min(h + 20, 740) : 320;
+    .map(({ label, href, w, h }) => {
+      const safeW = Number.isFinite(w) ? w : 300;
+      const safeH = Number.isFinite(h) ? h : 250;
+
       return `
-        <div class="card" data-label="${escapeHtml(label)}">
+        <div class="card" data-label="${escapeHtml(label)}" style="--w:${safeW}; --h:${safeH}">
           <div class="meta">
             <div class="label" title="${escapeHtml(label)}">${escapeHtml(label)}</div>
             <a class="open" href="${href}" target="_blank" rel="noopener">open</a>
           </div>
-          <iframe src="${href}" height="${iframeHeight}" loading="lazy"></iframe>
+          <div class="stage">
+            <iframe src="${href}" width="${safeW}" height="${safeH}" loading="lazy"></iframe>
+          </div>
         </div>
       `;
     })
@@ -109,39 +211,33 @@ function buildGlobalPreviewHtml({ items }) {
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Banner Preview</title>
   <style>
-    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:16px;background:#fafafa}
-    h1{margin:0 0 6px 0;font-size:20px}
-    .sub{color:#555;margin:0 0 14px 0;font-size:13px}
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:16px;background:#fafafa;overflow-x:auto}
     .bar{display:flex;gap:10px;align-items:center;margin:0 0 14px 0}
     input{flex:1;max-width:520px;padding:10px 12px;border:1px solid #ddd;border-radius:10px;font-size:14px}
-    .count{font-size:13px;color:#666}
-    .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:14px}
-    .card{background:#fff;border:1px solid #e6e6e6;border-radius:10px;padding:10px;box-shadow:0 1px 4px rgba(0,0,0,.04)}
+    .count{font-size:13px;color:#666;white-space:nowrap}
+    .grid{display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start}
+    .card{background:#fff;border:1px solid #e6e6e6;border-radius:10px;padding:10px;box-shadow:0 1px 4px rgba(0,0,0,.04);width:calc(var(--w) * 1px + 16px);max-width:100%}
+    .stage{width:calc(var(--w) * 1px);padding:8px;border:1px solid #eee;border-radius:8px;background:#f6f6f6;max-width:100%;overflow:auto}
     .meta{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:8px}
     .label{font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     .open{font-size:13px;text-decoration:none}
-    iframe{width:100%;border:1px solid #eee;border-radius:8px;background:#f6f6f6}
+    iframe{display:block;width:calc(var(--w) * 1px);height:calc(var(--h) * 1px);border:0;background:#fff}
     .hidden{display:none}
   </style>
 </head>
 <body>
-  <h1>Banner Preview</h1>
-  <p class="sub">Auto-generated grid. Re-run with <code>--preview</code> after adding banners/assets.</p>
-
+  <h1 style="margin:0 0 10px 0;font-size:20px">Banner Preview</h1>
   <div class="bar">
-    <input id="q" placeholder="Filter (campaign / language / motive / size)…" />
+    <input id="q" placeholder="Filter (size)…" />
     <div class="count"><span id="shown"></span>/<span id="total"></span></div>
   </div>
-
   <div class="grid" id="grid">${cards}</div>
-
   <script>
     const q = document.getElementById('q');
     const cards = Array.from(document.querySelectorAll('.card'));
     const shown = document.getElementById('shown');
     const total = document.getElementById('total');
     total.textContent = cards.length;
-
     function update(){
       const v = (q.value || '').trim().toLowerCase();
       let visible = 0;
@@ -160,7 +256,7 @@ function buildGlobalPreviewHtml({ items }) {
 </html>`;
 }
 
-async function generateGlobalPreviewPage({ sourceRoot }) {
+async function generateGlobalPreviewPage({ sourceRoot, openAfter = false, port = 8080 }) {
   const indexFiles = await collectBannerIndexFiles(sourceRoot);
 
   const items = indexFiles.map((absIndex) => {
@@ -169,22 +265,34 @@ async function generateGlobalPreviewPage({ sourceRoot }) {
     const parts = relFolder.split("/");
     const size = parts[parts.length - 1] ?? "";
     const m = size.match(/^(\d+)x(\d+)$/i);
+    const w = m ? Number(m[1]) : NaN;
     const h = m ? Number(m[2]) : NaN;
-
-    return { href, label: relFolder, h };
+    const label = Number.isFinite(w) && Number.isFinite(h) ? `${w}x${h}` : size;
+    return { href, label, w, h };
   });
 
-  items.sort((a, b) => a.label.localeCompare(b.label));
+  items.sort((a, b) => (a.w - b.w) || (a.h - b.h) || a.label.localeCompare(b.label));
 
   const html = buildGlobalPreviewHtml({ items });
-  const outPath = path.join(sourceRoot, "index.html");
-  await fs.ensureDir(sourceRoot);
-  await fs.writeFile(outPath, html, "utf8");
 
-  console.log(`🖼️ Preview page created: ${outPath}`);
+  const outPath = path.join(sourceRoot, "_preview.html");
+  if (!(await fs.pathExists(outPath))) {
+    await fs.writeFile(outPath, html, "utf8");
+    console.log(`🖼️ Preview page created: ${outPath}`);
+  } else {
+    console.log(`🖼️ Preview page already exists (not overwritten): ${outPath}`);
+  }
+
+  const url = `http://127.0.0.1:${port}/_preview.html`;
+  console.log(`🔗 Open: ${url}`);
+
+  if (openAfter) {
+    const open = (await import("open")).default;
+    await open(url);
+  }
 }
 
-// -------------------- assets + rendering --------------------
+// -------------------- assets --------------------
 
 async function readAssets(bannerFolder) {
   const assetsDir = path.join(bannerFolder, "assets");
@@ -195,37 +303,70 @@ async function readAssets(bannerFolder) {
     .filter((f) => !/@2x\./i.test(f))
     .sort();
 
-  return files.map((file) => ({
-    id: path.parse(file).name,
-    file
-  }));
+  return files.map((file) => ({ id: path.parse(file).name, file }));
 }
 
-async function renderTextFiles(dir, data) {
+// -------------------- incremental state --------------------
+
+async function readGenState(bannerFolder) {
+  const p = path.join(bannerFolder, ".gen-state.json");
+  if (!(await fs.pathExists(p))) return null;
+  try {
+    return await fs.readJson(p);
+  } catch {
+    return null;
+  }
+}
+
+async function writeGenState(bannerFolder, state) {
+  const p = path.join(bannerFolder, ".gen-state.json");
+  await fs.writeJson(p, state, { spaces: 2 });
+}
+
+function sameStringArray(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b)) return false;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+function stableStringify(obj) {
+  const seen = new WeakSet();
+  const sorter = (x) => {
+    if (x && typeof x === "object") {
+      if (seen.has(x)) return x;
+      seen.add(x);
+      if (Array.isArray(x)) return x.map(sorter);
+      const out = {};
+      for (const k of Object.keys(x).sort()) out[k] = sorter(x[k]);
+      return out;
+    }
+    return x;
+  };
+  return JSON.stringify(sorter(obj));
+}
+
+// -------------------- rendering (ONLY from *.mustache) --------------------
+
+async function renderFromMustacheFiles(dir, data, { overwrite }) {
   const entries = await fs.readdir(dir, { withFileTypes: true });
 
   for (const entry of entries) {
     const full = path.join(dir, entry.name);
 
     if (entry.isDirectory()) {
-      await renderTextFiles(full, data);
+      await renderFromMustacheFiles(full, data, { overwrite });
       continue;
     }
 
-    const isTemplate = entry.name.endsWith(".mustache");
-    const isRenderable = isTemplate || /\.(html|css|js|json|txt|md)$/i.test(entry.name);
-    if (!isRenderable) continue;
+    if (!entry.name.endsWith(".mustache")) continue;
+
+    const outPath = full.replace(/\.mustache$/i, "");
+    if (!overwrite && (await fs.pathExists(outPath))) continue;
 
     const raw = await fs.readFile(full, "utf8");
     const out = mustache.render(raw, data);
-
-    if (isTemplate) {
-      const outPath = full.replace(/\.mustache$/i, "");
-      await fs.writeFile(outPath, out, "utf8");
-      await fs.remove(full);
-    } else {
-      await fs.writeFile(full, out, "utf8");
-    }
+    await fs.writeFile(outPath, out, "utf8");
   }
 }
 
@@ -242,7 +383,13 @@ async function zipFolder(srcDir, zipPath) {
     archive.on("error", reject);
 
     archive.pipe(output);
-    archive.directory(srcDir, false);
+
+    archive.glob("**/*", {
+      cwd: srcDir,
+      dot: true,
+      ignore: ["**/*.mustache", "**/.DS_Store", "**/Thumbs.db", "**/.gen-state.json"],
+    });
+
     archive.finalize();
   });
 }
@@ -272,33 +419,66 @@ async function collectBannerFolders(rootDir) {
 
 // -------------------- generation --------------------
 
+function matchesFilters({ fmt, idx, cfg, templateOverride, filters }) {
+  const size = normalizeSize(fmt.width, fmt.height);
+  const lang = String(fmt.language ?? fmt.lang ?? "");
+  const motive = String(fmt.motive ?? fmt.motiveName ?? "");
+  const { type: templateType } = getTemplateRoot(fmt, cfg, templateOverride);
+
+  if (filters.onlyIndex && !filters.onlyIndex.has(idx)) return false;
+  if (filters.onlySize && !filters.onlySize.has(size)) return false;
+  if (filters.onlyLang && !filters.onlyLang.has(lang)) return false;
+  if (filters.onlyMotive && !filters.onlyMotive.has(motive)) return false;
+  if (filters.onlyTemplate && !filters.onlyTemplate.has(templateType)) return false;
+
+  return true;
+}
+
 async function generateFromFormatsJson({
   formatsAbsPath,
   outDirOverride,
   campaignOverride,
   clicktagOverride,
-  shouldZip
+  shouldZip,
+  templateOverride,
+  mode, // "incremental" | "create-only" | "update"
+  onlySizesFromPromptOrArgs, // Set<string> | null
 }) {
   const cfg = await fs.readJson(formatsAbsPath);
-
-  const formats = Array.isArray(cfg) ? cfg : (Array.isArray(cfg.formats) ? cfg.formats : []);
+  const formats = Array.isArray(cfg) ? cfg : Array.isArray(cfg.formats) ? cfg.formats : [];
   if (!formats.length) {
-    throw new Error(
-      `No formats found in ${formatsAbsPath}. Expected { "formats": [ ... ] } or a JSON array.`
-    );
+    throw new Error(`No formats found in ${formatsAbsPath}. Expected { "formats": [ ... ] } or a JSON array.`);
   }
 
+  const filters = {
+    onlySize: onlySizesFromPromptOrArgs ?? parseCsvSet(getArgValue("--only-size")),
+    onlyLang: parseCsvSet(getArgValue("--only-lang")),
+    onlyMotive: parseCsvSet(getArgValue("--only-motive")),
+    onlyTemplate: parseCsvSet(getArgValue("--only-template")),
+    onlyIndex: parseIndexSet(getArgValue("--only-index")),
+  };
+
   const campaign = campaignOverride ?? cfg.campaign ?? "my-campaign";
-  const outDir = outDirOverride ?? "./source";
+  const outDir = outDirOverride ?? "./src";
   const outRoot = path.resolve(process.cwd(), outDir, campaign);
   const zipRoot = path.resolve(process.cwd(), "output", "zip");
 
-  let count = 0;
+  let processed = 0;
+  let created = 0;
+  let updated = 0;
+  let skipped = 0;
+  let filteredOut = 0;
 
-  for (const fmt of formats) {
+  for (let idx = 0; idx < formats.length; idx++) {
+    const fmt = formats[idx];
+
+    if (!matchesFilters({ fmt, idx, cfg, templateOverride, filters })) {
+      filteredOut += 1;
+      continue;
+    }
+
     const width = Number(fmt.width);
     const height = Number(fmt.height);
-
     if (!Number.isFinite(width) || !Number.isFinite(height)) {
       throw new Error(`Invalid width/height in formats.json entry: ${JSON.stringify(fmt)}`);
     }
@@ -313,33 +493,86 @@ async function generateFromFormatsJson({
       `${width}x${height}`
     );
 
+    const bannerIndex = path.join(bannerFolder, "index.html");
+    const exists = await fs.pathExists(bannerIndex);
+
+    // Mode rules
+    if (mode === "create-only" && exists) {
+      skipped += 1;
+      continue;
+    }
+    if (mode === "update" && !exists) {
+      skipped += 1;
+      continue;
+    }
+
+    const { type: templateType, root: templateRoot } = getTemplateRoot(fmt, cfg, templateOverride);
+    if (!(await fs.pathExists(templateRoot))) {
+      throw new Error(`Template "${templateType}" not found. Expected folder: ${templateRoot}`);
+    }
+
+    // Ensure folder exists
     await fs.ensureDir(bannerFolder);
 
-    // Overwrite template files but NEVER clobber existing assets
-    await fs.copy(TEMPLATE_ROOT, bannerFolder, {
-      overwrite: true,
-      filter: (src) => !src.includes(`${path.sep}assets${path.sep}`)
-    });
-    await fs.ensureDir(path.join(bannerFolder, "assets"));
+    // Copy template ONLY when creating a new banner (prevents overwriting other formats)
+    if (!exists) {
+      await fs.copy(templateRoot, bannerFolder, {
+        overwrite: false,
+        errorOnExist: false,
+        filter: (src) => !src.includes(`${path.sep}assets${path.sep}`),
+      });
+    }
 
+    // assets folder always exists
+    await fs.ensureDir(path.join(bannerFolder, "assets"));
     const assets = await readAssets(bannerFolder);
+    const assetsFiles = assets.map((a) => a.file);
+
+    // Decide if we should render in incremental mode
+    const prevState = await readGenState(bannerFolder);
+    const fmtSig = stableStringify(fmt);
+    const assetsChanged = !prevState || !sameStringArray(prevState.assetsFiles, assetsFiles);
+    const fmtChanged = !prevState || prevState.fmtSig !== fmtSig;
+    const shouldRender =
+      mode === "update" ? true : mode === "create-only" ? !exists : !exists || assetsChanged || fmtChanged;
+
+    if (!shouldRender) {
+      skipped += 1;
+      continue;
+    }
 
     const maxBytes = parseKb(fmt.size);
     const adserverType = fmt?.adserver?.type ?? "standard";
     const clicktag = clicktagOverride ?? cfg.clicktag ?? fmt.clicktag ?? "https://example.com";
 
-    await renderTextFiles(bannerFolder, {
-      CAMPAIGN: campaign,
-      LANGUAGE: langCode ?? "",
-      MOTIVE: motiveName ?? "",
-      WIDTH: width,
-      HEIGHT: height,
-      SIZE_KB: fmt.size ?? "",
-      MAX_BYTES: maxBytes ?? "",
-      ADSERVER_TYPE: adserverType,
-      CLICKTAG: clicktag,
-      ASSETS: assets,
-      FORMAT_JSON: JSON.stringify(fmt)
+    // Rendering:
+    // - We ONLY render from *.mustache sources
+    // - overwrite is true because outputs are derived artifacts
+    // - mustache sources remain untouched
+    await renderFromMustacheFiles(
+      bannerFolder,
+      {
+        CAMPAIGN: campaign,
+        LANGUAGE: langCode ?? "",
+        MOTIVE: motiveName ?? "",
+        WIDTH: width,
+        HEIGHT: height,
+        SIZE_KB: fmt.size ?? "",
+        MAX_BYTES: maxBytes ?? "",
+        ADSERVER_TYPE: adserverType,
+        CLICKTAG: clicktag,
+        ASSETS: assets,
+        FORMAT_JSON: JSON.stringify(fmt),
+        TEMPLATE_TYPE: templateType,
+      },
+      { overwrite: true }
+    );
+
+    await writeGenState(bannerFolder, {
+      assetsFiles,
+      fmtSig,
+      templateType,
+      updatedAt: new Date().toISOString(),
     });
 
     if (shouldZip) {
@@ -347,10 +580,17 @@ async function generateFromFormatsJson({
       await zipFolder(bannerFolder, path.join(zipRoot, zipName));
     }
 
-    count += 1;
+    processed += 1;
+    if (!exists) created += 1;
+    if (exists) updated += 1;
   }
 
-  console.log(`✅ Generated ${count} banner(s) in: ${outRoot}`);
+  console.log(`✅ Processed: ${processed} format(s)`);
+  if (filteredOut) console.log(`🔎 Filtered out: ${filteredOut}`);
+  if (mode === "create-only") console.log(`➕ Created: ${created} | ⏭️ Skipped existing: ${skipped}`);
+  else if (mode === "update") console.log(`♻️ Updated: ${updated} | ⏭️ Skipped missing: ${skipped}`);
+  else console.log(`⚡ Incremental: created ${created}, updated ${updated}, skipped ${skipped}`);
+  console.log(`📁 Output: ${outRoot}`);
   if (shouldZip) console.log(`📦 Zipped to: ${zipRoot}`);
 }
 
@@ -358,28 +598,59 @@ async function generateFromFormatsJson({
 
 async function main() {
   const formatsAbsPath = await resolveFormatsPath();
-
   if (!formatsAbsPath) {
     console.error("❌ Could not find formats.json.");
-    console.error("   Put formats.json in the project root, or run: banner-generator --formats path/to/formats.json");
+    console.error("   Put formats.json in the project root, or run: node ./bin/cli.js --formats path/to/formats.json");
     process.exit(1);
   }
 
   const outDirOverride = getArgValue("--outDir");
   const campaignOverride = getArgValue("--campaign");
   const clicktagOverride = getArgValue("--clicktag");
+  const templateOverride = getArgValue("--template");
 
   const shouldZip = hasFlag("--zip");
   const zipOnly = hasFlag("--zip-only");
   const makePreview = hasFlag("--preview");
 
-  const cfg = await fs.readJson(formatsAbsPath);
+  // Modes:
+  // - default: incremental (create missing, update only when assets/format changed)
+  // - --create-only: only create missing (never update)
+  // - --update: force update existing (never create new)
+  const createOnly = hasFlag("--create-only");
+  const updateOnly = hasFlag("--update");
+  if (createOnly && updateOnly) {
+    console.error("❌ Use only one of --create-only or --update (not both).");
+    process.exit(1);
+  }
+  const mode = createOnly ? "create-only" : updateOnly ? "update" : "incremental";
 
+  const cfg = await fs.readJson(formatsAbsPath);
   const campaign = campaignOverride ?? cfg.campaign ?? "my-campaign";
-  const outDir = outDirOverride ?? "./source";
+  const outDir = outDirOverride ?? "./src";
   const outRoot = path.resolve(process.cwd(), outDir, campaign);
   const zipRoot = path.resolve(process.cwd(), "output", "zip");
   const sourceRoot = path.resolve(process.cwd(), outDir);
+
+  // ---------- pick specific sizes ----------
+  // Allow: `npm run gen 300x600 728x90` (args after flags)
+  // Or prompt if none are provided (only when not zip-only/preview-only)
+  const rawArgs = process.argv.slice(2);
+  const freeArgs = stripKnownFlags(rawArgs);
+  let onlySizes = parseSizeList(freeArgs);
+
+  if (!zipOnly && !makePreview && !onlySizes) {
+    const ans = await ask(
+      `Generate which formats?\n` + `  1) all\n` + `  2) specific sizes\n` + `Choose 1 or 2: `
+    );
+
+    if (ans === "2") {
+      const sizesStr = await ask(`Enter sizes (comma separated), e.g. 300x600, 728x90: `);
+      onlySizes = parseSizeList(sizesStr);
+      if (!onlySizes) console.log("⚠️ No valid sizes entered. Generating ALL.");
+    }
+  }
+  // ----------------------------------------
 
   if (zipOnly) {
     const folders = await collectBannerFolders(outRoot);
@@ -391,10 +662,7 @@ async function main() {
     let zipped = 0;
     for (const bannerFolder of folders) {
       const rel = path.relative(outRoot, bannerFolder).split(path.sep).join("_");
-      const zipName = `${campaign}_${rel}`
-        .replace(/\s+/g, "_")
-        .replace(/[^\w.-]+/g, "_") + ".zip";
-
+      const zipName = `${campaign}_${rel}`.replace(/\s+/g, "_").replace(/[^\w.-]+/g, "_") + ".zip";
       await zipFolder(bannerFolder, path.join(zipRoot, zipName));
       zipped += 1;
     }
@@ -402,9 +670,10 @@ async function main() {
     console.log(`📦 Zipped ${zipped} banner(s) to: ${zipRoot}`);
 
     if (makePreview) {
-      await generateGlobalPreviewPage({ sourceRoot });
+      const openAfter = hasFlag("--open");
+      const port = Number(getArgValue("--port") ?? 8080);
+      await generateGlobalPreviewPage({ sourceRoot, openAfter, port });
     }
-
     return;
   }
 
@@ -413,11 +682,16 @@ async function main() {
     outDirOverride,
     campaignOverride,
     clicktagOverride,
-    shouldZip
+    shouldZip,
+    templateOverride,
+    mode,
+    onlySizesFromPromptOrArgs: onlySizes,
   });
 
   if (makePreview) {
-    await generateGlobalPreviewPage({ sourceRoot });
+    const openAfter = hasFlag("--open");
+    const port = Number(getArgValue("--port") ?? 8080);
+    await generateGlobalPreviewPage({ sourceRoot, openAfter, port });
   }
 }
 

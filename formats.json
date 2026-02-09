@@ -7,18 +7,8 @@
         "width": 300, 
         "height": 600, 
         "size": "250 kb", 
-        "adserver": { 
-            "type": "standard" 
-            }     
-    },
-    { 
-        "language": "PHEV", 
-        "motive": "s700_v2", 
-        "width": 728, 
-        "height": 90, 
-        "size": "250 kb", 
-        "adserver": { 
-            "type": "standard" 
+        "brand": { 
+            "type": "ebro" 
             }     
     },
     { 
@@ -27,18 +17,58 @@
         "width": 320, 
         "height": 250, 
         "size": "250 kb", 
-        "adserver": { 
-            "type": "standard" 
+        "brand": { 
+            "type": "ebro" 
             }     
     },
     { 
         "language": "PHEV", 
         "motive": "s700_v2", 
-        "width": 160, 
-        "height": 600, 
+        "width": 728, 
+        "height": 90, 
         "size": "250 kb", 
-        "adserver": { 
-            "type": "standard" 
+        "brand": { 
+            "type": "ebro" 
+            }     
+    },
+    { 
+        "language": "PHEV", 
+        "motive": "s700_v2", 
+        "width": 970, 
+        "height": 250, 
+        "size": "250 kb", 
+        "brand": { 
+            "type": "ebro" 
+            }     
+    },
+    { 
+        "language": "PHEV", 
+        "motive": "s700_v2", 
+        "width": 980, 
+        "height": 250, 
+        "size": "250 kb", 
+        "brand": { 
+            "type": "ebro" 
+            }     
+    },
+    { 
+        "language": "PHEV", 
+        "motive": "s700_v2", 
+        "width": 320, 
+        "height": 100, 
+        "size": "250 kb", 
+        "brand": { 
+            "type": "ebro" 
+            }     
+    },
+    { 
+        "language": "PHEV", 
+        "motive": "s700_v2", 
+        "width": 1000, 
+        "height": 90, 
+        "size": "250 kb", 
+        "brand": { 
+            "type": "ebro" 
             }     
     }
   ]

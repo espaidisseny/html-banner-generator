@@ -46,3 +46,48 @@ body {
   transform-style: preserve-3d;
 }
 
+#cta1a{
+  background-image: url("../assets/cta1a.png");
+}
+#cta1b{
+  background-image: url("../assets/cta1b.png");
+}
+#cta2a{
+  background-image: url("../assets/cta2a.png");
+}
+#cta2b{
+  background-image: url("../assets/cta2b.png");
+}
+#fondo1{
+  background-image: url("../assets/fondo1.png");
+}
+#fondo2{
+  background-image: url("../assets/fondo2.png");
+}
+#hl1{
+  background-image: url("../assets/hl1.png");
+}
+#legal{
+  background-image: url("../assets/legal.png");
+}
+#logo{
+  background-image: url("../assets/logo.png");
+}
+#precio{
+  background-image: url("../assets/precio.png");
+}
+#slogan{
+  background-image: url("../assets/slogan.png");
+}
+#stickers{
+  background-image: url("../assets/stickers.png");
+}
+#subhl1{
+  background-image: url("../assets/subhl1.png");
+}
+#subhl2{
+  background-image: url("../assets/subhl2.png");
+}
+#subhl3{
+  background-image: url("../assets/subhl3.png");
+}

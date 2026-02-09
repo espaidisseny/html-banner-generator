@@ -11,6 +11,21 @@
   <body>
     <a id="clickArea" href="javascript:void(0)" aria-label="Clickthrough"></a>
     <div id="banner">
+        <div id="cta1a" class="retina"></div>
+        <div id="cta1b" class="retina"></div>
+        <div id="cta2a" class="retina"></div>
+        <div id="cta2b" class="retina"></div>
+        <div id="fondo1" class="retina"></div>
+        <div id="fondo2" class="retina"></div>
+        <div id="hl1" class="retina"></div>
+        <div id="legal" class="retina"></div>
+        <div id="logo" class="retina"></div>
+        <div id="precio" class="retina"></div>
+        <div id="slogan" class="retina"></div>
+        <div id="stickers" class="retina"></div>
+        <div id="subhl1" class="retina"></div>
+        <div id="subhl2" class="retina"></div>
+        <div id="subhl3" class="retina"></div>
       <div id="cover"></div>
     </div>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.13.0/gsap.min.js"></script>
@@ -18,7 +33,7 @@
     <script>
           const clickTag = "https://example.com";
           document.getElementById("clickArea").addEventListener("click", () => {
-            window.open(clickTag, "_blank");
+            (window.top || window).open(clickTag, "_blank");
           });
     </script>
   </body>

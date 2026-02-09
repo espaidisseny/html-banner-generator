@@ -1,0 +1,22 @@
+{
+  "assetsFiles": [
+    "cta1a.png",
+    "cta1b.png",
+    "cta2a.png",
+    "cta2b.png",
+    "fondo1.png",
+    "fondo2.png",
+    "hl1.png",
+    "legal.png",
+    "logo.png",
+    "precio.png",
+    "slogan.png",
+    "stickers.png",
+    "subhl1.png",
+    "subhl2.png",
+    "subhl3.png"
+  ],
+  "fmtSig": "{\"brand\":{\"type\":\"ebro\"},\"height\":600,\"language\":\"PHEV\",\"motive\":\"s700_v2\",\"size\":\"250 kb\",\"width\":300}",
+  "templateType": "ebro",
+  "updatedAt": "2026-02-09T15:14:09.702Z"
+}

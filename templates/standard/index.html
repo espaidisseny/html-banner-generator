@@ -21,7 +21,7 @@
     <script>
           const clickTag = "{{{CLICKTAG}}}";
           document.getElementById("clickArea").addEventListener("click", () => {
-            window.open(clickTag, "_blank");
+            (window.top || window).open(clickTag, "_blank");
           });
     </script>
   </body>

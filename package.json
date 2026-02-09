@@ -7,14 +7,17 @@
     "banner-generator": "./bin/cli.js"
   },
   "scripts": {
-    "gen": "banner-generator",
-    "zip": "banner-generator --zip",
-    "zip-only": "banner-generator --zip-only",
-    "preview": "banner-generator --preview"
+  "gen": "node ./bin/cli.js --create-only",
+  "update": "node ./bin/cli.js --update",
+  "zip": "node ./bin/cli.js --zip-only",
+  "serve": "node ./bin/cli.js --preview && npx live-server ./src --port=8080 --host=127.0.0.1 --open=/_preview.html"
   },
   "dependencies": {
     "archiver": "^6.0.1",
     "fs-extra": "^11.2.0",
     "mustache": "^4.2.0"
+  },
+  "devDependencies": {
+    "live-server": "^1.2.2"
   }
 }
