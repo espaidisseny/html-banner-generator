@@ -9,9 +9,16 @@ import readline from "node:readline";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// -------------------- templates --------------------
+// -------------------- constants --------------------
 
 const TEMPLATES_DIR = path.join(__dirname, "..", "templates");
+const DEFAULT_OUT_DIR = "./src";
+const DEFAULT_CAMPAIGN = "my-campaign";
+const DEFAULT_CLICKTAG = "https://example.com";
+const DEFAULT_ADSERVER_TYPE = "standard";
+const DEFAULT_PORT = 8080;
+
+// -------------------- templates --------------------
 
 function getTemplateRoot(fmt, cfg, templateOverride) {
   const type = templateOverride ?? fmt?.brand?.type ?? cfg?.brand?.type ?? "standard";
@@ -32,15 +39,19 @@ function ask(question) {
 
 // -------------------- cli utils --------------------
 
+function argv() {
+  return process.argv.slice(2);
+}
+
 function getArgValue(flag) {
-  const args = process.argv.slice(2);
+  const args = argv();
   const i = args.indexOf(flag);
   if (i === -1) return null;
   return args[i + 1] ?? null;
 }
 
 function hasFlag(flag) {
-  return process.argv.slice(2).includes(flag);
+  return argv().includes(flag);
 }
 
 function stripKnownFlags(args) {
@@ -124,6 +135,26 @@ function parseIndexSet(v) {
   return parts.length ? new Set(parts) : null;
 }
 
+function makeZipName({ campaign, langCode, motiveName, width, height }) {
+  return (
+    [campaign, langCode, motiveName, `${width}x${height}`]
+      .filter(Boolean)
+      .join("_")
+      .replace(/\s+/g, "_")
+      .replace(/[^\w.-]+/g, "_") + ".zip"
+  );
+}
+
+function ensureValidMode({ createOnly, updateOnly }) {
+  if (createOnly && updateOnly) {
+    console.error("❌ Use only one of --create-only or --update (not both).");
+    process.exit(1);
+  }
+  return createOnly ? "create-only" : updateOnly ? "update" : "incremental";
+}
+
+// -------------------- config + paths --------------------
+
 // Resolve formats.json even if user runs from /src or anywhere else.
 async function resolveFormatsPath() {
   const cliValue = getArgValue("--formats") ?? getArgValue("--config");
@@ -138,14 +169,15 @@ async function resolveFormatsPath() {
   return null;
 }
 
-function makeZipName({ campaign, langCode, motiveName, width, height }) {
-  return (
-    [campaign, langCode, motiveName, `${width}x${height}`]
-      .filter(Boolean)
-      .join("_")
-      .replace(/\s+/g, "_")
-      .replace(/[^\w.-]+/g, "_") + ".zip"
-  );
+function readFormatsFromCfg(cfg) {
+  return Array.isArray(cfg) ? cfg : Array.isArray(cfg.formats) ? cfg.formats : [];
+}
+
+function buildRoots({ outDir, campaign }) {
+  const outRoot = path.resolve(process.cwd(), outDir, campaign);
+  const zipRoot = path.resolve(process.cwd(), "output", "zip");
+  const sourceRoot = path.resolve(process.cwd(), outDir);
+  return { outRoot, zipRoot, sourceRoot };
 }
 
 // -------------------- preview (GLOBAL GRID) --------------------
@@ -256,32 +288,29 @@ function buildGlobalPreviewHtml({ items }) {
 </html>`;
 }
 
-async function generateGlobalPreviewPage({ sourceRoot, openAfter = false, port = 8080 }) {
+function indexFileToPreviewItem({ sourceRoot, absIndex }) {
+  const href = path.relative(sourceRoot, absIndex).split(path.sep).join("/");
+  const relFolder = href.replace(/\/index\.html$/i, "");
+  const parts = relFolder.split("/");
+  const size = parts[parts.length - 1] ?? "";
+  const m = size.match(/^(\d+)x(\d+)$/i);
+  const w = m ? Number(m[1]) : NaN;
+  const h = m ? Number(m[2]) : NaN;
+  const label = Number.isFinite(w) && Number.isFinite(h) ? `${w}x${h}` : size;
+  return { href, label, w, h };
+}
+
+async function generateGlobalPreviewPage({ sourceRoot, openAfter = false, port = DEFAULT_PORT }) {
   const indexFiles = await collectBannerIndexFiles(sourceRoot);
 
-  const items = indexFiles.map((absIndex) => {
-    const href = path.relative(sourceRoot, absIndex).split(path.sep).join("/");
-    const relFolder = href.replace(/\/index\.html$/i, "");
-    const parts = relFolder.split("/");
-    const size = parts[parts.length - 1] ?? "";
-    const m = size.match(/^(\d+)x(\d+)$/i);
-    const w = m ? Number(m[1]) : NaN;
-    const h = m ? Number(m[2]) : NaN;
-    const label = Number.isFinite(w) && Number.isFinite(h) ? `${w}x${h}` : size;
-    return { href, label, w, h };
-  });
-
+  const items = indexFiles.map((absIndex) => indexFileToPreviewItem({ sourceRoot, absIndex }));
   items.sort((a, b) => (a.w - b.w) || (a.h - b.h) || a.label.localeCompare(b.label));
 
   const html = buildGlobalPreviewHtml({ items });
 
   const outPath = path.join(sourceRoot, "_preview.html");
-  if (!(await fs.pathExists(outPath))) {
-    await fs.writeFile(outPath, html, "utf8");
-    console.log(`🖼️ Preview page created: ${outPath}`);
-  } else {
-    console.log(`🖼️ Preview page already exists (not overwritten): ${outPath}`);
-  }
+  await fs.writeFile(outPath, html, "utf8");
+  console.log(`🖼️ Preview page updated: ${outPath}`);
 
   const url = `http://127.0.0.1:${port}/_preview.html`;
   console.log(`🔗 Open: ${url}`);
@@ -417,7 +446,17 @@ async function collectBannerFolders(rootDir) {
   return found;
 }
 
-// -------------------- generation --------------------
+// -------------------- generation helpers --------------------
+
+function buildFilters({ onlySizesFromPromptOrArgs }) {
+  return {
+    onlySize: onlySizesFromPromptOrArgs ?? parseCsvSet(getArgValue("--only-size")),
+    onlyLang: parseCsvSet(getArgValue("--only-lang")),
+    onlyMotive: parseCsvSet(getArgValue("--only-motive")),
+    onlyTemplate: parseCsvSet(getArgValue("--only-template")),
+    onlyIndex: parseIndexSet(getArgValue("--only-index")),
+  };
+}
 
 function matchesFilters({ fmt, idx, cfg, templateOverride, filters }) {
   const size = normalizeSize(fmt.width, fmt.height);
@@ -434,6 +473,61 @@ function matchesFilters({ fmt, idx, cfg, templateOverride, filters }) {
   return true;
 }
 
+function resolveLangAndMotive(fmt) {
+  const langCode = fmt.language ?? fmt.lang ?? null;
+  const motiveName = fmt.motive ?? fmt.motiveName ?? null;
+  return { langCode, motiveName };
+}
+
+function bannerFolderFor({ outRoot, langCode, motiveName, width, height }) {
+  return path.join(
+    outRoot,
+    ...(langCode ? [String(langCode)] : []),
+    ...(motiveName ? [String(motiveName)] : []),
+    `${width}x${height}`
+  );
+}
+
+async function ensureTemplateOnCreate({ templateRoot, bannerFolder, exists }) {
+  if (exists) return;
+
+  await fs.copy(templateRoot, bannerFolder, {
+    overwrite: false,
+    errorOnExist: false,
+    filter: (src) => !src.includes(`${path.sep}assets${path.sep}`),
+  });
+}
+
+function shouldProcessBanner({ mode, exists }) {
+  // Mode rules
+  if (mode === "create-only" && exists) return false;
+  if (mode === "update" && !exists) return false;
+  return true;
+}
+
+function shouldRenderBanner({ mode, exists, prevState, assetsFiles, fmtSig }) {
+  const assetsChanged = !prevState || !sameStringArray(prevState.assetsFiles, assetsFiles);
+  const fmtChanged = !prevState || prevState.fmtSig !== fmtSig;
+
+  return mode === "update"
+    ? true
+    : mode === "create-only"
+      ? !exists
+      : !exists || assetsChanged || fmtChanged;
+}
+
+function logSummary({ processed, created, updated, skipped, filteredOut, mode, outRoot, shouldZip, zipRoot }) {
+  console.log(`✅ Processed: ${processed} format(s)`);
+  if (filteredOut) console.log(`🔎 Filtered out: ${filteredOut}`);
+  if (mode === "create-only") console.log(`➕ Created: ${created} | ⏭️ Skipped existing: ${skipped}`);
+  else if (mode === "update") console.log(`♻️ Updated: ${updated} | ⏭️ Skipped missing: ${skipped}`);
+  else console.log(`⚡ Incremental: created ${created}, updated ${updated}, skipped ${skipped}`);
+  console.log(`📁 Output: ${outRoot}`);
+  if (shouldZip) console.log(`📦 Zipped to: ${zipRoot}`);
+}
+
+// -------------------- generation --------------------
+
 async function generateFromFormatsJson({
   formatsAbsPath,
   outDirOverride,
@@ -445,23 +539,18 @@ async function generateFromFormatsJson({
   onlySizesFromPromptOrArgs, // Set<string> | null
 }) {
   const cfg = await fs.readJson(formatsAbsPath);
-  const formats = Array.isArray(cfg) ? cfg : Array.isArray(cfg.formats) ? cfg.formats : [];
+  const formats = readFormatsFromCfg(cfg);
+
   if (!formats.length) {
     throw new Error(`No formats found in ${formatsAbsPath}. Expected { "formats": [ ... ] } or a JSON array.`);
   }
 
-  const filters = {
-    onlySize: onlySizesFromPromptOrArgs ?? parseCsvSet(getArgValue("--only-size")),
-    onlyLang: parseCsvSet(getArgValue("--only-lang")),
-    onlyMotive: parseCsvSet(getArgValue("--only-motive")),
-    onlyTemplate: parseCsvSet(getArgValue("--only-template")),
-    onlyIndex: parseIndexSet(getArgValue("--only-index")),
-  };
+  const filters = buildFilters({ onlySizesFromPromptOrArgs });
 
-  const campaign = campaignOverride ?? cfg.campaign ?? "my-campaign";
-  const outDir = outDirOverride ?? "./src";
-  const outRoot = path.resolve(process.cwd(), outDir, campaign);
-  const zipRoot = path.resolve(process.cwd(), "output", "zip");
+  const campaign = campaignOverride ?? cfg.campaign ?? DEFAULT_CAMPAIGN;
+  const outDir = outDirOverride ?? DEFAULT_OUT_DIR;
+
+  const { outRoot, zipRoot } = buildRoots({ outDir, campaign });
 
   let processed = 0;
   let created = 0;
@@ -483,25 +572,13 @@ async function generateFromFormatsJson({
       throw new Error(`Invalid width/height in formats.json entry: ${JSON.stringify(fmt)}`);
     }
 
-    const langCode = fmt.language ?? fmt.lang ?? null;
-    const motiveName = fmt.motive ?? fmt.motiveName ?? null;
+    const { langCode, motiveName } = resolveLangAndMotive(fmt);
 
-    const bannerFolder = path.join(
-      outRoot,
-      ...(langCode ? [String(langCode)] : []),
-      ...(motiveName ? [String(motiveName)] : []),
-      `${width}x${height}`
-    );
-
+    const bannerFolder = bannerFolderFor({ outRoot, langCode, motiveName, width, height });
     const bannerIndex = path.join(bannerFolder, "index.html");
     const exists = await fs.pathExists(bannerIndex);
 
-    // Mode rules
-    if (mode === "create-only" && exists) {
-      skipped += 1;
-      continue;
-    }
-    if (mode === "update" && !exists) {
+    if (!shouldProcessBanner({ mode, exists })) {
       skipped += 1;
       continue;
     }
@@ -515,13 +592,7 @@ async function generateFromFormatsJson({
     await fs.ensureDir(bannerFolder);
 
     // Copy template ONLY when creating a new banner (prevents overwriting other formats)
-    if (!exists) {
-      await fs.copy(templateRoot, bannerFolder, {
-        overwrite: false,
-        errorOnExist: false,
-        filter: (src) => !src.includes(`${path.sep}assets${path.sep}`),
-      });
-    }
+    await ensureTemplateOnCreate({ templateRoot, bannerFolder, exists });
 
     // assets folder always exists
     await fs.ensureDir(path.join(bannerFolder, "assets"));
@@ -531,10 +602,7 @@ async function generateFromFormatsJson({
     // Decide if we should render in incremental mode
     const prevState = await readGenState(bannerFolder);
     const fmtSig = stableStringify(fmt);
-    const assetsChanged = !prevState || !sameStringArray(prevState.assetsFiles, assetsFiles);
-    const fmtChanged = !prevState || prevState.fmtSig !== fmtSig;
-    const shouldRender =
-      mode === "update" ? true : mode === "create-only" ? !exists : !exists || assetsChanged || fmtChanged;
+    const shouldRender = shouldRenderBanner({ mode, exists, prevState, assetsFiles, fmtSig });
 
     if (!shouldRender) {
       skipped += 1;
@@ -542,8 +610,8 @@ async function generateFromFormatsJson({
     }
 
     const maxBytes = parseKb(fmt.size);
-    const adserverType = fmt?.adserver?.type ?? "standard";
-    const clicktag = clicktagOverride ?? cfg.clicktag ?? fmt.clicktag ?? "https://example.com";
+    const adserverType = fmt?.adserver?.type ?? DEFAULT_ADSERVER_TYPE;
+    const clicktag = clicktagOverride ?? cfg.clicktag ?? fmt.clicktag ?? DEFAULT_CLICKTAG;
 
     // Rendering:
     // - We ONLY render from *.mustache sources
@@ -585,13 +653,57 @@ async function generateFromFormatsJson({
     if (exists) updated += 1;
   }
 
-  console.log(`✅ Processed: ${processed} format(s)`);
-  if (filteredOut) console.log(`🔎 Filtered out: ${filteredOut}`);
-  if (mode === "create-only") console.log(`➕ Created: ${created} | ⏭️ Skipped existing: ${skipped}`);
-  else if (mode === "update") console.log(`♻️ Updated: ${updated} | ⏭️ Skipped missing: ${skipped}`);
-  else console.log(`⚡ Incremental: created ${created}, updated ${updated}, skipped ${skipped}`);
-  console.log(`📁 Output: ${outRoot}`);
-  if (shouldZip) console.log(`📦 Zipped to: ${zipRoot}`);
+  logSummary({ processed, created, updated, skipped, filteredOut, mode, outRoot, shouldZip, zipRoot });
+}
+
+// -------------------- size selection --------------------
+
+async function resolveOnlySizes({ zipOnly, makePreview }) {
+  // Allow: `npm run gen 300x600 728x90` (args after flags)
+  // Or prompt if none are provided (only when not zip-only/preview-only)
+  const rawArgs = argv();
+  const freeArgs = stripKnownFlags(rawArgs);
+  let onlySizes = parseSizeList(freeArgs);
+
+  if (!zipOnly && !makePreview && !onlySizes) {
+    const ans = await ask(
+      `Generate which formats?\n` + `  1) all\n` + `  2) specific sizes\n` + `Choose 1 or 2: `
+    );
+
+    if (ans === "2") {
+      const sizesStr = await ask(`Enter sizes (comma separated), e.g. 300x600, 728x90: `);
+      onlySizes = parseSizeList(sizesStr);
+      if (!onlySizes) console.log("⚠️ No valid sizes entered. Generating ALL.");
+    }
+  }
+
+  return onlySizes;
+}
+
+// -------------------- zip-only workflow --------------------
+
+async function zipOnlyWorkflow({ outRoot, zipRoot, campaign, makePreview, sourceRoot }) {
+  const folders = await collectBannerFolders(outRoot);
+  if (!folders.length) {
+    console.error(`❌ No banner folders found under: ${outRoot}`);
+    process.exit(1);
+  }
+
+  let zipped = 0;
+  for (const bannerFolder of folders) {
+    const rel = path.relative(outRoot, bannerFolder).split(path.sep).join("_");
+    const zipName = `${campaign}_${rel}`.replace(/\s+/g, "_").replace(/[^\w.-]+/g, "_") + ".zip";
+    await zipFolder(bannerFolder, path.join(zipRoot, zipName));
+    zipped += 1;
+  }
+
+  console.log(`📦 Zipped ${zipped} banner(s) to: ${zipRoot}`);
+
+  if (makePreview) {
+    const openAfter = hasFlag("--open");
+    const port = Number(getArgValue("--port") ?? DEFAULT_PORT);
+    await generateGlobalPreviewPage({ sourceRoot, openAfter, port });
+  }
 }
 
 // -------------------- main --------------------
@@ -617,63 +729,18 @@ async function main() {
   // - default: incremental (create missing, update only when assets/format changed)
   // - --create-only: only create missing (never update)
   // - --update: force update existing (never create new)
-  const createOnly = hasFlag("--create-only");
-  const updateOnly = hasFlag("--update");
-  if (createOnly && updateOnly) {
-    console.error("❌ Use only one of --create-only or --update (not both).");
-    process.exit(1);
-  }
-  const mode = createOnly ? "create-only" : updateOnly ? "update" : "incremental";
+  const mode = ensureValidMode({ createOnly: hasFlag("--create-only"), updateOnly: hasFlag("--update") });
 
   const cfg = await fs.readJson(formatsAbsPath);
-  const campaign = campaignOverride ?? cfg.campaign ?? "my-campaign";
-  const outDir = outDirOverride ?? "./src";
-  const outRoot = path.resolve(process.cwd(), outDir, campaign);
-  const zipRoot = path.resolve(process.cwd(), "output", "zip");
-  const sourceRoot = path.resolve(process.cwd(), outDir);
+  const campaign = campaignOverride ?? cfg.campaign ?? DEFAULT_CAMPAIGN;
+  const outDir = outDirOverride ?? DEFAULT_OUT_DIR;
 
-  // ---------- pick specific sizes ----------
-  // Allow: `npm run gen 300x600 728x90` (args after flags)
-  // Or prompt if none are provided (only when not zip-only/preview-only)
-  const rawArgs = process.argv.slice(2);
-  const freeArgs = stripKnownFlags(rawArgs);
-  let onlySizes = parseSizeList(freeArgs);
+  const { outRoot, zipRoot, sourceRoot } = buildRoots({ outDir, campaign });
 
-  if (!zipOnly && !makePreview && !onlySizes) {
-    const ans = await ask(
-      `Generate which formats?\n` + `  1) all\n` + `  2) specific sizes\n` + `Choose 1 or 2: `
-    );
-
-    if (ans === "2") {
-      const sizesStr = await ask(`Enter sizes (comma separated), e.g. 300x600, 728x90: `);
-      onlySizes = parseSizeList(sizesStr);
-      if (!onlySizes) console.log("⚠️ No valid sizes entered. Generating ALL.");
-    }
-  }
-  // ----------------------------------------
+  const onlySizes = await resolveOnlySizes({ zipOnly, makePreview });
 
   if (zipOnly) {
-    const folders = await collectBannerFolders(outRoot);
-    if (!folders.length) {
-      console.error(`❌ No banner folders found under: ${outRoot}`);
-      process.exit(1);
-    }
-
-    let zipped = 0;
-    for (const bannerFolder of folders) {
-      const rel = path.relative(outRoot, bannerFolder).split(path.sep).join("_");
-      const zipName = `${campaign}_${rel}`.replace(/\s+/g, "_").replace(/[^\w.-]+/g, "_") + ".zip";
-      await zipFolder(bannerFolder, path.join(zipRoot, zipName));
-      zipped += 1;
-    }
-
-    console.log(`📦 Zipped ${zipped} banner(s) to: ${zipRoot}`);
-
-    if (makePreview) {
-      const openAfter = hasFlag("--open");
-      const port = Number(getArgValue("--port") ?? 8080);
-      await generateGlobalPreviewPage({ sourceRoot, openAfter, port });
-    }
+    await zipOnlyWorkflow({ outRoot, zipRoot, campaign, makePreview, sourceRoot });
     return;
   }
 
@@ -690,7 +757,7 @@ async function main() {
 
   if (makePreview) {
     const openAfter = hasFlag("--open");
-    const port = Number(getArgValue("--port") ?? 8080);
+    const port = Number(getArgValue("--port") ?? DEFAULT_PORT);
     await generateGlobalPreviewPage({ sourceRoot, openAfter, port });
   }
 }
