@@ -209,7 +209,7 @@ function buildGlobalPreviewHtml({ items }) {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Banner Preview</title>
+  <title>Banner Previews</title>
   <style>
     body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:16px;background:#fafafa;overflow-x:auto}
     .bar{display:flex;gap:10px;align-items:center;margin:0 0 14px 0}
@@ -226,7 +226,7 @@ function buildGlobalPreviewHtml({ items }) {
   </style>
 </head>
 <body>
-  <h1 style="margin:0 0 10px 0;font-size:20px">Banner Preview</h1>
+  <h1 style="margin:0 0 10px 0;font-size:20px">Banner Previews</h1>
   <div class="bar">
     <input id="q" placeholder="Filter (size)…" />
     <div class="count"><span id="shown"></span>/<span id="total"></span></div>
