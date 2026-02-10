@@ -241,15 +241,15 @@ function buildGlobalPreviewHtml({ items }) {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Banner Previews</title>
+  <title>HTML5 Banner Previews</title>
   <style>
-    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:16px;background:#fafafa;overflow-x:auto}
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:16px;background:#e5eeff;overflow-x:auto}
     .bar{display:flex;gap:10px;align-items:center;margin:0 0 14px 0}
     input{flex:1;max-width:520px;padding:10px 12px;border:1px solid #ddd;border-radius:10px;font-size:14px}
     .count{font-size:13px;color:#666;white-space:nowrap}
     .grid{display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start}
-    .card{background:#fff;border:1px solid #e6e6e6;border-radius:10px;padding:10px;box-shadow:0 1px 4px rgba(0,0,0,.04);width:calc(var(--w) * 1px + 16px);max-width:100%}
-    .stage{width:calc(var(--w) * 1px);padding:8px;border:1px solid #eee;border-radius:8px;background:#f6f6f6;max-width:100%;overflow:auto}
+    .card{background:#ffffff;border:1px solid #000000;border-radius:10px;padding:10px;box-shadow:0 1px 4px rgba(0,0,0,.04);width:calc(var(--w) * 1px + 16px);max-width:100%}
+    .stage{width:calc(var(--w) * 1px);padding:8px;border:1px solid #ffffff;border-radius:8px;background:#ffffff;max-width:100%;overflow:auto}
     .meta{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:8px}
     .label{font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     .open{font-size:13px;text-decoration:none}
@@ -258,9 +258,9 @@ function buildGlobalPreviewHtml({ items }) {
   </style>
 </head>
 <body>
-  <h1 style="margin:0 0 10px 0;font-size:20px">Banner Previews</h1>
+  <h1 style="margin:0 0 10px 0;font-size:20px">HTML5 Banner Previews</h1>
   <div class="bar">
-    <input id="q" placeholder="Filter (size)…" />
+    <input id="q" placeholder="Filter..." />
     <div class="count"><span id="shown"></span>/<span id="total"></span></div>
   </div>
   <div class="grid" id="grid">${cards}</div>
