@@ -244,7 +244,7 @@ function buildGlobalPreviewHtml({ items }) {
   <title>HTML5 Banner Previews</title>
   <style>
     body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:16px;overflow-x:auto}
-    body::before { content: "";position: fixed;inset: 0;background-image: url("/assets/L-ESPAI_BG.png");background-size: cover;background-position: center;background-repeat: no-repeat;opacity: 0.7;z-index: -1;pointer-events: none;}
+    body::before { content: "";position: fixed;inset: 0;background-image: url("/assets/L-ESPAI_BG.png");background-size: cover;background-position: center;background-repeat: no-repeat;opacity: 0.4;z-index: -1;pointer-events: none;}
     .bar{display:flex;gap:10px;align-items:center;margin:0 0 14px 0}
     input{flex:1;max-width:520px;padding:10px 12px;border:1px solid #ddd;border-radius:10px;font-size:14px}
     .count{font-size:13px;color:#666;white-space:nowrap}
@@ -254,7 +254,7 @@ function buildGlobalPreviewHtml({ items }) {
     .meta{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:8px}
     .label{font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     .open{font-size:13px;text-decoration:none}
-    .bottom-logo{ position: fixed;bottom: 56px;right: 56px;height: 38px;width: auto;z-index: -1;pointer-events: none;}
+    .bottom-logo{ position: fixed;bottom: 56px;right: 56px;height: 28px;width: auto;z-index: -1;pointer-events: none;}
     iframe{display:block;width:calc(var(--w) * 1px);height:calc(var(--h) * 1px);border:0;background:#fff}
     .hidden{display:none}
   </style>
