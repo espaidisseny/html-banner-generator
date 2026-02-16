@@ -244,7 +244,7 @@ function buildGlobalPreviewHtml({ items }) {
   <title>HTML5 Banner Previews</title>
   <style>
     body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:16px;overflow-x:auto}
-    body::before { content: "";position: fixed;inset: 0;background-image: url("/assets/L-ESPAI_BG.png");background-size: cover;background-position: center;background-repeat: no-repeat;opacity: 0.4;z-index: -1;pointer-events: none;}
+    body::before { content: "";position: fixed;inset: 0;background-image: url("./assets/L-ESPAI_BG.png");background-size: cover;background-position: center;background-repeat: no-repeat;opacity: 0.4;z-index: -1;pointer-events: none;}
     .bar{display:flex;gap:10px;align-items:center;margin:0 0 14px 0}
     input{flex:1;max-width:520px;padding:10px 12px;border:1px solid #ddd;border-radius:10px;font-size:14px}
     .count{font-size:13px;color:#666;white-space:nowrap}
@@ -260,7 +260,7 @@ function buildGlobalPreviewHtml({ items }) {
   </style>
 </head>
 <body>
-  <img src="/assets/l-espai-logo.png" alt="L’Espai" class="bottom-logo">
+  <img src="./assets/l-espai-logo.png" alt="L’Espai" class="bottom-logo">
   <div class="bar">
     <input id="q" placeholder="Filter..." />
     <div class="count"><span id="shown"></span>/<span id="total"></span></div>
