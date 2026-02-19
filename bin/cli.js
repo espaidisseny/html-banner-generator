@@ -336,6 +336,22 @@ async function readAssets(bannerFolder) {
 
   return files.map((file) => ({ id: path.parse(file).name, file }));
 }
+async function syncGlobalTemplateAssets({ templateRoot, sourceRoot }) {
+  const srcAssets = path.join(templateRoot, "assets");
+  const dstAssets = path.join(sourceRoot, "assets");
+
+  if (!(await fs.pathExists(srcAssets))) return;
+
+  // Merge-copy assets into src/assets
+  await fs.ensureDir(dstAssets);
+  await fs.copy(srcAssets, dstAssets, {
+    overwrite: true,     // or false if you never want to override existing
+    errorOnExist: false,
+  });
+
+  console.log(`🧩 Synced template assets: ${srcAssets} → ${dstAssets}`);
+}
+
 
 // -------------------- incremental state --------------------
 
@@ -827,6 +843,10 @@ async function main() {
   const outDir = outDirOverride ?? DEFAULT_OUT_DIR;
 
   const { outRoot, zipRoot, sourceRoot } = buildRoots({ outDir, campaign });
+
+  // ✅ Copy template assets into src/assets for `npm run serve`
+  const { root: templateRoot } = getTemplateRoot(null, cfg, templateOverride);
+  await syncGlobalTemplateAssets({ templateRoot, sourceRoot });
 
   const onlySizes = await resolveOnlySizes({ zipOnly, makePreview });
 
