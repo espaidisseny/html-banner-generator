@@ -217,21 +217,70 @@ function escapeHtml(s) {
 }
 
 function buildGlobalPreviewHtml({ items }) {
-  const cards = items
-    .map(({ label, href, w, h }) => {
-      const safeW = Number.isFinite(w) ? w : 300;
-      const safeH = Number.isFinite(h) ? h : 250;
+  // Group by motive
+  const groups = new Map(); // motive -> items[]
+  for (const it of items) {
+    const key = String(it.motive || "—").trim() || "—";
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(it);
+  }
+
+  // Sort motives and sort items inside each motive by size
+  const motiveKeys = Array.from(groups.keys()).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  for (const k of motiveKeys) {
+    groups.get(k).sort((a, b) => (a.w - b.w) || (a.h - b.h) || a.label.localeCompare(b.label));
+  }
+
+  const slugify = (s) =>
+    String(s)
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, "-")
+      .replace(/[^\w-]+/g, "")
+      .replace(/-+/g, "-");
+
+  const cardHtml = ({ label, href, w, h, motive }) => {
+    const safeW = Number.isFinite(w) ? w : 300;
+    const safeH = Number.isFinite(h) ? h : 250;
+
+    // searchable text: motive + label
+    const search = `${motive || ""} ${label || ""}`.trim();
+
+    return `
+      <div class="card" data-search="${escapeHtml(search)}" style="--w:${safeW}; --h:${safeH}">
+        <div class="meta">
+          <div class="label" title="${escapeHtml(label)}">${escapeHtml(label)}</div>
+          <a class="open" href="${href}" target="_blank" rel="noopener">open</a>
+        </div>
+        <div class="stage">
+          <iframe src="${href}" width="${safeW}" height="${safeH}" loading="lazy"></iframe>
+        </div>
+      </div>
+    `;
+  };
+
+  const toc = motiveKeys
+    .map((motive) => {
+      const id = slugify(motive);
+      const count = groups.get(motive)?.length ?? 0;
+      return `<a class="chip" href="#${id}" data-motive-link="${escapeHtml(motive)}">${escapeHtml(motive)} <span class="chipCount">(${count})</span></a>`;
+    })
+    .join("");
+
+  const sections = motiveKeys
+    .map((motive) => {
+      const id = slugify(motive);
+      const cards = groups.get(motive).map((it) => cardHtml(it)).join("");
+      const count = groups.get(motive)?.length ?? 0;
 
       return `
-        <div class="card" data-label="${escapeHtml(label)}" style="--w:${safeW}; --h:${safeH}">
-          <div class="meta">
-            <div class="label" title="${escapeHtml(label)}">${escapeHtml(label)}</div>
-            <a class="open" href="${href}" target="_blank" rel="noopener">open</a>
+        <section class="section" id="${id}" data-motive="${escapeHtml(motive)}">
+          <div class="sectionHead">
+            <h2 class="sectionTitle">${escapeHtml(motive)}</h2>
+            <div class="sectionCount"><span class="sectionShown">${count}</span>/${count}</div>
           </div>
-          <div class="stage">
-            <iframe src="${href}" width="${safeW}" height="${safeH}" loading="lazy"></iframe>
-          </div>
-        </div>
+          <div class="grid">${cards}</div>
+        </section>
       `;
     })
     .join("");
@@ -243,46 +292,262 @@ function buildGlobalPreviewHtml({ items }) {
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>HTML5 Banner Previews</title>
   <style>
-    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:16px;overflow-x:auto}
-    body::before { content: "";position: fixed;inset: 0;background-image: url("./assets/L-ESPAI_BG.png");background-size: cover;background-position: center;background-repeat: no-repeat;opacity: 0.4;z-index: -1;pointer-events: none;}
-    .bar{display:flex;gap:10px;align-items:center;margin:0 0 14px 0}
-    input{flex:1;max-width:520px;padding:10px 12px;border:1px solid #ddd;border-radius:10px;font-size:14px}
-    .count{font-size:13px;color:#666;white-space:nowrap}
-    .grid{display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start}
-    .card{background:#ffffff;border:1px solid #000000;border-radius:10px;padding:10px;box-shadow:0 1px 4px rgba(0,0,0,.04);width:calc(var(--w) * 1px + 16px);max-width:100%}
-    .stage{width:calc(var(--w) * 1px);padding:8px;border:1px solid #ffffff;border-radius:8px;background:#ffffff;max-width:100%;overflow:auto}
-    .meta{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:8px}
-    .label{font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-    .open{font-size:13px;text-decoration:none}
-    .bottom-logo{ position: fixed;bottom: 56px;right: 56px;height: 28px;width: auto;z-index: -1;pointer-events: none;}
-    iframe{display:block;width:calc(var(--w) * 1px);height:calc(var(--h) * 1px);border:0;background:#fff}
-    .hidden{display:none}
+    :root{
+  --panel-bg: rgba(255,255,255,.92);
+  --panel-brd: rgba(0,0,0,.12);
+  --shadow: 0 10px 30px rgba(0,0,0,.08);
+  --shadow-soft: 0 2px 10px rgba(0,0,0,.06);
+}
+
+html{scroll-behavior:smooth;}
+body{
+  font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+  margin:16px;
+  overflow-x:auto;
+}
+body::before{
+  content:"";
+  position:fixed;
+  inset:0;
+  background-image:url("./assets/L-ESPAI_BG.png");
+  background-size:cover;
+  background-position:center;
+  background-repeat:no-repeat;
+  opacity:.35;
+  z-index:-1;
+  pointer-events:none;
+}
+
+/* --- top bar --- */
+.bar{
+  display:flex;
+  gap:10px;
+  align-items:center;
+  margin:0 0 14px 0;
+  position:sticky;
+  top:0;
+  background:var(--panel-bg);
+  backdrop-filter:blur(8px);
+  padding:12px;
+  border-radius:14px;
+  border:1px solid rgba(0,0,0,.10);
+  box-shadow:var(--shadow-soft);
+  z-index:20;
+}
+input{
+  flex:1;
+  max-width:520px;
+  padding:11px 12px;
+  border:1px solid rgba(0,0,0,.15);
+  border-radius:12px;
+  font-size:14px;
+  background:#fff;
+}
+.count{font-size:13px;color:#444;white-space:nowrap}
+
+/* --- TOC --- */
+.toc{
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+  margin:0 0 18px 0;
+  padding-bottom:6px;
+  border-bottom:1px dashed rgba(0,0,0,.18);
+}
+.chip{
+  display:inline-flex;
+  gap:6px;
+  align-items:center;
+  padding:8px 11px;
+  border-radius:999px;
+  border:1px solid rgba(0,0,0,.18);
+  background:#fff;
+  box-shadow:0 1px 6px rgba(0,0,0,.06);
+  text-decoration:none;
+  font-size:13px;
+  color:#111;
+}
+.chip:hover{transform:translateY(-1px)}
+.chipCount{color:#555;font-weight:500}
+
+/* --- BIG SECTION SEPARATION --- */
+.section{
+  margin:22px 0 28px 0;
+  padding:16px 14px 16px 14px;
+  border-radius:18px;
+  border:2px solid rgba(0,0,0,.12);
+  box-shadow:var(--shadow);
+  position:relative;
+}
+.section.hidden{display:none}
+
+/* top stripe to scream “new section” */
+.section::before{
+  position:absolute;
+  left:14px;
+  right:14px;
+  top:12px;
+  height:4px;
+  border-radius:999px;
+  background:rgba(0,0,0,.12);
+}
+
+/* header block */
+.sectionHead{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  margin:0 0 12px 0;
+  padding:10px 12px;
+  border-radius:14px;
+  background:rgba(255,255,255,.90);
+  border:1px solid rgba(0,0,0,.12);
+}
+.sectionTitle{
+  margin:0;
+  font-size:16px;
+  letter-spacing:.2px;
+  display:flex;
+  align-items:center;
+  gap:10px;
+}
+.sectionTitle::before{
+  content:"";
+  width:10px;
+  height:10px;
+  border-radius:3px;
+  background:rgba(0,0,0,.25);
+  display:inline-block;
+}
+.sectionCount{
+  font-size:13px;
+  color:#444;
+  white-space:nowrap;
+  padding:6px 10px;
+  border-radius:999px;
+  border:1px solid rgba(0,0,0,.14);
+  background:#fff;
+}
+
+/* cards */
+.grid{
+  display:flex;
+  flex-wrap:wrap;
+  gap:14px;
+  align-items:flex-start;
+}
+.card{
+  background:#ffffff;
+  border:1px solid rgba(0,0,0,.85);
+  border-radius:12px;
+  padding:10px;
+  box-shadow:0 1px 10px rgba(0,0,0,.06);
+  width:calc(var(--w) * 1px + 16px);
+  max-width:100%;
+}
+.stage{
+  width:calc(var(--w) * 1px);
+  padding:8px;
+  border:1px solid rgba(0,0,0,.08);
+  border-radius:10px;
+  background:#fff;
+  max-width:100%;
+  overflow:auto;
+}
+.meta{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  gap:10px;
+  margin-bottom:8px;
+}
+.label{
+  font-weight:700;
+  font-size:13px;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+.open{
+  font-size:13px;
+  text-decoration:none;
+  padding:6px 9px;
+  border-radius:10px;
+  border:1px solid rgba(0,0,0,.15);
+  background:#fff;
+}
+.open:hover{background:rgba(0,0,0,.04)}
+iframe{
+  display:block;
+  width:calc(var(--w) * 1px);
+  height:calc(var(--h) * 1px);
+  border:0;
+  background:#fff
+}
+.hidden{display:none}
+
+.bottom-logo{
+  position:fixed;
+  bottom:56px;
+  right:56px;
+  height:28px;
+  width:auto;
+  z-index:-1;
+  pointer-events:none;
+}
   </style>
 </head>
 <body>
   <img src="./assets/l-espai-logo.png" alt="L’Espai" class="bottom-logo">
+
   <div class="bar">
-    <input id="q" placeholder="Filter..." />
+    <input id="q" placeholder="Filter by motive or size..." />
     <div class="count"><span id="shown"></span>/<span id="total"></span></div>
   </div>
-  <div class="grid" id="grid">${cards}</div>
+
+  <div class="toc" id="toc">${toc}</div>
+
+  <main id="main">
+    ${sections}
+  </main>
+
   <script>
     const q = document.getElementById('q');
-    const cards = Array.from(document.querySelectorAll('.card'));
     const shown = document.getElementById('shown');
     const total = document.getElementById('total');
-    total.textContent = cards.length;
+
+    const allCards = Array.from(document.querySelectorAll('.card'));
+    const sections = Array.from(document.querySelectorAll('.section'));
+
+    total.textContent = allCards.length;
+
     function update(){
       const v = (q.value || '').trim().toLowerCase();
-      let visible = 0;
-      for(const c of cards){
-        const label = (c.getAttribute('data-label') || '').toLowerCase();
-        const ok = !v || label.includes(v);
+      let visibleCards = 0;
+
+      // show/hide cards
+      for(const c of allCards){
+        const s = (c.getAttribute('data-search') || '').toLowerCase();
+        const ok = !v || s.includes(v);
         c.classList.toggle('hidden', !ok);
-        if(ok) visible++;
+        if(ok) visibleCards++;
       }
-      shown.textContent = visible;
+
+      // show/hide sections + update per-section counts
+      for(const sec of sections){
+        const cards = Array.from(sec.querySelectorAll('.card'));
+        const visibleInSection = cards.reduce((acc, el) => acc + (!el.classList.contains('hidden') ? 1 : 0), 0);
+
+        const shownEl = sec.querySelector('.sectionShown');
+        if(shownEl) shownEl.textContent = visibleInSection;
+
+        sec.classList.toggle('hidden', visibleInSection === 0);
+      }
+
+      shown.textContent = visibleCards;
     }
+
     q.addEventListener('input', update);
     update();
   </script>
@@ -294,12 +559,20 @@ function indexFileToPreviewItem({ sourceRoot, absIndex }) {
   const href = path.relative(sourceRoot, absIndex).split(path.sep).join("/");
   const relFolder = href.replace(/\/index\.html$/i, "");
   const parts = relFolder.split("/");
+
+  // last part should be "WxH"
   const size = parts[parts.length - 1] ?? "";
   const m = size.match(/^(\d+)x(\d+)$/i);
   const w = m ? Number(m[1]) : NaN;
   const h = m ? Number(m[2]) : NaN;
+
+  // motive is the folder immediately above size (works for both:
+  // <campaign>/<motive>/<WxH> and <campaign>/<lang>/<motive>/<WxH>)
+  const motive = parts.length >= 2 ? (parts[parts.length - 2] ?? "") : "";
+
   const label = Number.isFinite(w) && Number.isFinite(h) ? `${w}x${h}` : size;
-  return { href, label, w, h };
+
+  return { href, label, w, h, motive };
 }
 
 async function generateGlobalPreviewPage({ sourceRoot, openAfter = false, port = DEFAULT_PORT }) {
